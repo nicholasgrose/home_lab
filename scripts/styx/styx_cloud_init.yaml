@@ -1,0 +1,125 @@
+#cloud-config
+
+# Set hostname
+hostname: styx
+preserve_hostname: false
+
+# Update and upgrade packages
+package_update: true
+package_upgrade: true
+
+# Install required packages
+packages:
+  - wireguard
+  - podman
+  - podman-compose
+  - python3-pip
+  - iptables-persistent
+  - fail2ban
+  - ufw
+  - curl
+  - wget
+  - git
+  - jq
+  - unzip
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - apt-transport-https
+  - software-properties-common
+
+# Create a user with sudo privileges
+users:
+  - name: styx-admin
+    groups: sudo
+    shell: /bin/bash
+    sudo: [ 'ALL=(ALL) NOPASSWD:ALL' ]
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQD... # Replace this with your actual SSH public key
+
+# Configure timezone
+timezone: America/Chicago
+
+# Write files
+write_files:
+  # Wireguard configuration template (will be completed by the setup script)
+  - path: /etc/wireguard/wg0.conf.template
+    content: |
+      [Interface]
+      PrivateKey = ${WG_PRIVATE_KEY}
+      Address = ${WG_CLIENT_IP}/24
+      ListenPort = 51820
+
+      [Peer]
+      PublicKey = ${WG_PEER_PUBLIC_KEY}
+      AllowedIPs = ${WG_ALLOWED_IPS}
+      PersistentKeepalive = 25
+    permissions: '0600'
+
+  # Setup script
+  - path: /root/setup.sh
+    content: |
+      #!/bin/bash
+      # This script will be executed after cloud-init completes
+
+      # Source environment variables
+      if [ -f /root/styx_env.sh ]; then
+        source /root/styx_env.sh
+      fi
+
+      # Run the main setup script
+      if [ -f /root/styx_setup.sh ]; then
+        bash /root/styx_setup.sh
+      fi
+    permissions: '0700'
+
+  # Environment variables template
+  - path: /root/styx_env.sh.template
+    content: |
+      # Wireguard configuration
+      export WG_PRIVATE_KEY=""
+      export WG_CLIENT_IP=""
+      export WG_PEER_PUBLIC_KEY=""
+      export WG_ALLOWED_IPS=""
+
+      # Domain configuration
+      export DOMAIN_NAME="etymologiae.net"
+
+      # Nginx Proxy Manager configuration
+      export NPM_ADMIN_EMAIL=""
+      export NPM_ADMIN_PASSWORD=""
+      export NPM_DATABASE_PASSWORD=""
+    permissions: '0600'
+
+# Run commands on the first boot
+runcmd:
+  # Set up the firewall
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp     # SSH
+  - ufw allow 80/tcp     # HTTP
+  - ufw allow 443/tcp    # HTTPS
+  - ufw allow 51820/udp  # Wireguard
+  - ufw allow 25565/tcp  # Minecraft
+  - ufw allow 24454/tcp  # Minecraft Voice Chat Mod
+  - ufw allow 34197/udp  # Factorio
+  - ufw allow 7777/udp   # Satisfactory
+  - ufw allow 15000/tcp  # Satisfactory
+  - ufw allow 15777/udp  # Satisfactory
+  - ufw --force enable
+
+  # Enable and start fail2ban
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+
+  # Download the setup script
+  - curl -o /root/styx_setup.sh https://raw.githubusercontent.com/nicholasgrose/home_lab/refs/heads/main/scripts/styx/styx_setup.sh || echo "Failed to download setup script"
+
+  # Make setup script executable
+  - chmod +x /root/styx_setup.sh
+
+  # Create the environment file from the template
+  - cp /root/styx_env.sh.template /root/styx_env.sh
+
+  # Run setup script
+  - bash /root/setup.sh
