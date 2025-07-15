@@ -122,17 +122,49 @@ podman-compose up -d
 # ===== SYSTEM CONFIGURATION =====
 log "Configuring system settings"
 
-# Enable IP forwarding
-echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ip-forward.conf
+# Configure system-wide IP forwarding
+cat > /etc/sysctl.d/99-ip-forward.conf << 'EOF'
+net.ipv4.ip_forward=1
+net.ipv6.conf.default.forwarding=1
+net.ipv6.conf.all.forwarding=1
+EOF
 sysctl -p /etc/sysctl.d/99-ip-forward.conf
 
-# Configure iptables for NAT
-iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-iptables -A FORWARD -i wg0 -j ACCEPT
-iptables -A FORWARD -o wg0 -j ACCEPT
+# Configure UFW NAT and forwarding
+cat >> /etc/ufw/before.rules << 'EOF'
 
-# Save iptables rules
-iptables-save > /etc/iptables/rules.v4
+# NAT table rules
+*nat
+:POSTROUTING ACCEPT [0:0]
+:PREROUTING ACCEPT [0:0]
+
+# Forward traffic only from WireGuard subnet through eth0
+-A POSTROUTING -s ${WG_ALLOWED_IPS} -o eth0 -j MASQUERADE
+
+COMMIT
+
+# Filter table rules for WireGuard
+*filter
+:ufw-before-input ACCEPT [0:0]
+:ufw-before-output ACCEPT [0:0]
+:ufw-before-forward ACCEPT [0:0]
+
+# Forward only WireGuard traffic
+-A ufw-before-forward -i wg0 -j ACCEPT
+-A ufw-before-forward -o wg0 -j ACCEPT
+
+# Ensure VPN traffic is allowed
+-A ufw-before-input -i wg0 -j ACCEPT
+-A ufw-before-output -o wg0 -j ACCEPT
+
+COMMIT
+EOF
+
+# Keep UFW's default forward policy as DROP
+echo 'DEFAULT_FORWARD_POLICY="DROP"' > /etc/default/ufw
+
+# Reload UFW to apply changes
+ufw reload
 
 # Create systemd service for nginx-proxy-manager
 cat > /etc/systemd/system/nginx-proxy-manager.service << EOF
