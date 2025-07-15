@@ -27,14 +27,29 @@ packages:
   - apt-transport-https
   - software-properties-common
 
+# Disable SSH login via password (more secure)
+ssh_pwauth: false
+
 # Create a user with sudo privileges
 users:
   - name: styx-admin
     groups: sudo
     shell: /bin/bash
-    sudo: [ 'ALL=(ALL) NOPASSWD:ALL' ]
+    # Require password for sudo (more secure than NOPASSWD)
+    sudo: [ 'ALL=(ALL) ALL' ]
+    # Set a password for the user (this is a placeholder - replace with your own password)
+    # This is a hashed password - REPLACE THIS with your own hashed password
+    # Generate a password hash with: mkpasswd --method=SHA-512 --rounds=4096
+    # Or use the special directive 'password: YOURPASSWORD' to have cloud-init hash it for you
+    password: REPLACE_WITH_YOUR_PASSWORD_OR_HASH
+    # The type of password being used ("hash" if not included).
+    # Valid types: "hash", "text", and "RANDOM"
+    type: text
+    # Lock the password to prevent password-based SSH login (more secure)
+    lock_passwd: true
+    # IMPORTANT: Replace this placeholder with your actual SSH public key before deployment
     ssh_authorized_keys:
-      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQD... # Replace this with your actual SSH public key
+      - "ssh-ed25519 EXAMPLE_KEY_REPLACE_THIS_WITH_YOUR_ACTUAL_PUBLIC_KEY admin@example.com"
 
 # Configure timezone
 timezone: America/Chicago
@@ -75,47 +90,99 @@ write_files:
   # Environment variables template
   - path: /root/styx_env.sh.template
     content: |
+      # ===== IMPORTANT =====
+      # Replace all empty values and example values below with your actual configuration
+      # before running the setup script
+      # 
+      # NOTE: The sudo password and SSH key for the styx-admin user are set in the cloud-init 
+      # configuration (users section). Make sure to set it before deploying.
+      # =====================
+
       # Wireguard configuration
+      # WG_PRIVATE_KEY will be auto-generated if left empty
       export WG_PRIVATE_KEY=""
+      # Example: 10.0.0.2
       export WG_CLIENT_IP=""
+      # Public key from your WireGuard server
       export WG_PEER_PUBLIC_KEY=""
+      # Subnet to route through the VPN, example: 10.0.0.0/24
       export WG_ALLOWED_IPS=""
 
       # Domain configuration
-      export DOMAIN_NAME="etymologiae.net"
+      # Replace with your actual domain name
+      export DOMAIN_NAME="example.com"
 
       # Nginx Proxy Manager configuration
+      # Admin email for NPM login
       export NPM_ADMIN_EMAIL=""
+      # Strong password for NPM admin account (min 8 chars)
       export NPM_ADMIN_PASSWORD=""
+      # Strong password for NPM database (different from admin password)
       export NPM_DATABASE_PASSWORD=""
     permissions: '0600'
 
 # Run commands on the first boot
 runcmd:
-  # Set up the firewall
-  - ufw default deny incoming
-  - ufw default allow outgoing
-  - ufw allow 22/tcp     # SSH
-  - ufw allow 80/tcp     # HTTP
-  - ufw allow 443/tcp    # HTTPS
-  - ufw allow 51820/udp  # Wireguard
-  - ufw allow 25565/tcp  # Minecraft
-  - ufw allow 24454/tcp  # Minecraft Voice Chat Mod
-  - ufw allow 34197/udp  # Factorio
-  - ufw allow 7777/udp   # Satisfactory
-  - ufw allow 15000/tcp  # Satisfactory
-  - ufw allow 15777/udp  # Satisfactory
-  - ufw --force enable
+  # Set up the firewall with secure defaults
+  - |
+    echo "Configuring firewall (UFW)..."
+
+    # Set default policies
+    ufw default deny incoming
+    ufw default allow outgoing
+
+    # Essential services
+    ufw allow 22/tcp     # SSH - Required for remote administration
+    ufw allow 80/tcp     # HTTP - Required for Nginx Proxy Manager
+    ufw allow 443/tcp    # HTTPS - Required for Nginx Proxy Manager
+    ufw allow 51820/udp  # WireGuard VPN - Required for VPN connectivity
+
+    # OPTIONAL: Game server ports - Remove or comment out any unused ports
+    # Uncomment only the ports you need for your specific game servers
+
+    # Minecraft server
+    # ufw allow 25565/tcp  # Minecraft Java Edition
+    # ufw allow 24454/tcp  # Minecraft Voice Chat Mod
+
+    # Factorio server
+    # ufw allow 34197/udp  # Factorio
+
+    # Satisfactory server
+    # ufw allow 7777/udp   # Satisfactory
+    # ufw allow 15000/tcp  # Satisfactory
+    # ufw allow 15777/udp  # Satisfactory
+
+    # Enable the firewall non-interactively
+    ufw --force enable
+
+    echo "Firewall configured and enabled"
 
   # Enable and start fail2ban
   - systemctl enable fail2ban
   - systemctl start fail2ban
 
-  # Download the setup script
-  - curl -o /root/styx_setup.sh https://raw.githubusercontent.com/nicholasgrose/home_lab/refs/heads/main/scripts/styx/styx_setup.sh || echo "Failed to download setup script"
+  # Download the setup script with integrity verification
+  - |
+    # Download the setup script
+    echo "Downloading setup script..."
+    curl -s -o /root/styx_setup.sh https://raw.githubusercontent.com/nicholasgrose/home_lab/refs/heads/main/scripts/styx/styx_setup.sh
 
-  # Make setup script executable
-  - chmod +x /root/styx_setup.sh
+    # Verify the script was downloaded successfully
+    if [ ! -s /root/styx_setup.sh ]; then
+      echo "ERROR: Failed to download setup script or file is empty"
+      exit 1
+    fi
+
+    # Basic integrity check - verify the script contains expected content
+    if ! grep -q "Styx Setup Script" /root/styx_setup.sh; then
+      echo "ERROR: Downloaded script failed integrity check"
+      exit 1
+    fi
+
+    echo "Setup script downloaded and verified successfully"
+
+    # Make setup script executable
+    chmod 700 /root/styx_setup.sh
 
   # Create the environment file from the template
   - cp /root/styx_env.sh.template /root/styx_env.sh
